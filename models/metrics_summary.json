@@ -1,0 +1,86 @@
+[
+  {
+    "Model Name": "CatBoost Regressor",
+    "R2": 0.9272347732,
+    "MAE": 1192.4042734724,
+    "RMSE": 1665.1614837488,
+    "MAPE (%)": 4.9007802014
+  },
+  {
+    "Model Name": "LightGBM Regressor (Tuned)",
+    "R2": 0.9247651382,
+    "MAE": 1227.2736153381,
+    "RMSE": 1693.1833017137,
+    "MAPE (%)": 4.9860262467
+  },
+  {
+    "Model Name": "XGBoost Regressor (Tuned)",
+    "R2": 0.9238524335,
+    "MAE": 1229.6055617194,
+    "RMSE": 1703.4226883287,
+    "MAPE (%)": 5.0367319966
+  },
+  {
+    "Model Name": "LightGBM Regressor",
+    "R2": 0.92290078,
+    "MAE": 1230.7857841515,
+    "RMSE": 1714.0338932566,
+    "MAPE (%)": 5.0102870439
+  },
+  {
+    "Model Name": "ExtraTrees Regressor",
+    "R2": 0.9209537191,
+    "MAE": 1255.4346010712,
+    "RMSE": 1735.542022978,
+    "MAPE (%)": 5.0894533849
+  },
+  {
+    "Model Name": "HistGradientBoosting Regressor",
+    "R2": 0.9197247413,
+    "MAE": 1266.2644823805,
+    "RMSE": 1748.9817186652,
+    "MAPE (%)": 5.1277279089
+  },
+  {
+    "Model Name": "XGBoost Regressor",
+    "R2": 0.9178682443,
+    "MAE": 1273.0788661398,
+    "RMSE": 1769.0901577926,
+    "MAPE (%)": 5.2664892761
+  },
+  {
+    "Model Name": "MLP Regressor",
+    "R2": 0.9177567178,
+    "MAE": 1315.8374441772,
+    "RMSE": 1770.2908724904,
+    "MAPE (%)": 5.3328839599
+  },
+  {
+    "Model Name": "Random Forest Regressor",
+    "R2": 0.9106977359,
+    "MAE": 1332.4425996092,
+    "RMSE": 1844.6995758176,
+    "MAPE (%)": 5.4130655252
+  },
+  {
+    "Model Name": "Linear Regression",
+    "R2": 0.9060194152,
+    "MAE": 1403.1101677337,
+    "RMSE": 1892.402376137,
+    "MAPE (%)": 5.569082975
+  },
+  {
+    "Model Name": "SNaive Daily",
+    "R2": 0.8256966228,
+    "MAE": 1849.6640981735,
+    "RMSE": 2577.1952010183,
+    "MAPE (%)": 7.3702716833
+  },
+  {
+    "Model Name": "SNaive Weekly",
+    "R2": 0.7764130548,
+    "MAE": 2177.7064728456,
+    "RMSE": 2918.8893652428,
+    "MAPE (%)": 8.4360127568
+  }
+]

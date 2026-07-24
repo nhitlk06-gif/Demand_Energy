@@ -1,0 +1,26 @@
+# Python 3.12 (Colab default at time of the review reruns in
+# notebooks/05_horizon_review_reruns.ipynb).
+#
+# NOTE on pinning: the versions below are lower bounds verified against this
+# repository's own test/rerun environments, not a full `pip freeze` capture
+# from the exact historical training run (that run's environment was not
+# preserved). For a fully audit-locked reproduction, run
+#     pip freeze > requirements.lock.txt
+# immediately after retraining all models, and ship that lock file alongside
+# this one.
+numpy>=1.26,<2.5
+pandas>=2.1,<3.1
+scikit-learn>=1.3,<1.9
+scipy>=1.11,<1.18
+xgboost>=2.0,<3.1
+lightgbm>=4.0,<4.7
+catboost>=1.2,<1.3
+joblib>=1.3,<1.5
+matplotlib>=3.8,<3.11
+seaborn>=0.13,<0.14
+fastapi>=0.110,<0.120
+uvicorn[standard]>=0.29,<0.36
+streamlit>=1.30,<1.42
+plotly>=5.18,<5.25
+requests>=2.31,<2.33
+pytest>=8,<9

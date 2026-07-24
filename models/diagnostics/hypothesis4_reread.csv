@@ -1,0 +1,4 @@
+config,mae,n_features
+leak_removed_baseline,1441.308556327201,22
+with_renewables_lagged_12,1306.9709955588844,26
+with_renewables_contemporaneous,908.6726472094676,36

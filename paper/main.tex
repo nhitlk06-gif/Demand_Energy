@@ -1,0 +1,460 @@
+\documentclass[runningheads]{llncs}
+%
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage{url}
+\usepackage{float}
+\usepackage{subcaption}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+%
+\setcounter{tocdepth}{3}
+\pagestyle{headings}
+% NOTE (review, item 24): the llncs class must not be reformatted for
+% Springer submission -- \baselinestretch and the \addtolength float-spacing
+% overrides that used to be here were removed. If the paper now overflows
+% its page budget, cut content (the ADF paragraph in the EDA section, the
+% PACF figure, and/or turning the six hypothesis-experiment paragraphs into
+% the single table recommended in item 8) rather than reintroducing format
+% squeezing.
+%
+\begin{document}
+%
+\title{A Horizon Consistent Gradient Boosting Framework for Short Term Demand Forecasting on NESO Data}
+%
+\titlerunning{A Horizon Consistent Gradient Boosting Framework for STLF }
+%
+\author{Kieu Nhi\inst{1}\orcidID{0009-0001-1047-5080} \and
+Tu Ngan\inst{1}\orcidID{0009-0001-1089-2626} \and
+Bao Han\inst{1}\orcidID{0009-0002-2532-8099} \and
+Thu Le\inst{1}\orcidID{0009-0008-3480-8311} }
+%
+\authorrunning{Nhi et al.}
+\institute{FPT University, Ho Chi Minh City, Vietnam\\
+\email {nhiklt2006@gmail.com},
+\small\texttt{tunganphamhoang@gmail.com},
+\small\texttt{donghan010106@gmail.com},
+\small\texttt{thulvm@fpt.edu.vn}}
+\maketitle
+%
+\begin{abstract}
+Accurate short term electricity demand forecasting underpins the secure and economically efficient operation of national transmission grids under expanding embedded renewable penetration. A forecasting framework is developed for National Demand on the Great Britain transmission system, using half hourly settlement data from the National Energy System Operator (NESO), with a leakage safe pipeline enforcing a strict six hour minimum forecast lead time throughout. Twelve estimators (ten learned models and two Seasonal Naive baselines) are benchmarked on a chronological 2025 holdout, where CatBoost performs best, cutting RMSE by 35.4\% against the stronger seasonal naive baseline though NESO's own official day-ahead forecast still does considerably better again (2.69\% vs.\ 4.90\% MAPE), the most important context for reading everything that follows. The central contribution, however, is methodological rather than a single accuracy figure: this pipeline caught the identical forecast-horizon leak twice in succession, first in near instantaneous autoregressive lags and then again in exogenous columns recorded at the target's own settlement period, each fix lowering the reported accuracy while making it trustworthy. A hypothesis experiment once read as evidence that renewable generation "matters" turns out to be a second measurement of that same leak, and the resulting diagnostic template for auditing forecast horizon consistency is offered as this paper's principal lesson.
+\keywords{Short term load forecasting \and Horizon consistent feature engineering \and NESO \and Gradient boosting \and Seasonal Naive baseline \and Forecast horizon.}
+\end{abstract}
+
+\section{Introduction}
+\label{sec:intro}
+
+Reliable short term electricity demand forecasting underpins almost every operational decision made by a transmission system operator, from unit commitment and reserve procurement to the dispatch of power exchanges through interconnectors \cite{hyndman2018forecasting}, and sits alongside price forecasting as one of the two core forecasting problems system operators must solve \cite{weron2014electricity}. As power systems absorb a growing share of weather dependent embedded generation, the residual load operators must actively balance becomes increasingly difficult to describe using classical statistical models alone \cite{taylor2012short,fan2012short}, and the appropriate level of temporal aggregation for such forecasts remains an active research question \cite{sevlian2018scaling}. The problem is addressed here for Great Britain, using operational data published by NESO, the operator balancing electricity supply and demand nationwide \cite{neso2025historic}. The forecasting target is National Demand (ND), the aggregate net electricity requirement transmission connected generation must continuously match.
+
+Exploratory analysis, detailed in Section~\ref{sec:methodology}, shows that ND exhibits clear nested seasonality across intraday, weekly, and annual time scales, and that the series is statistically stationary in level despite this pronounced periodicity. This coexistence motivates a feature engineering strategy built around explicit seasonal lags rather than differencing. A further design consideration shapes the pipeline, because national demand changes negligibly within thirty to sixty minutes. Feeding a model the value observed at such a short remove lets it reconstruct the target from something effectively identical to itself, collapsing a genuine forecasting exercise into a near instantaneous nowcast. The framework therefore withholds every lag shorter than six hours and enforces a minimum forecast horizon throughout,
+\begin{equation}
+\hat{y}_{t} = f\big(\mathbf{x}_{t-h}\big), \qquad h \geq 12,
+\label{eq:direct_forecast}
+\end{equation}
+where $h$ denotes the horizon in settlement periods and the feature vector $\mathbf{x}_{t-h}$ is assembled exclusively from information settled at or before period $t-h$. Its autoregressive component spans four short term lag depths together with a weekly lag. Its rolling component summarises recent demand over three window widths, and its calendar component encodes settlement period and day of week as cyclical pairs. Under this formulation, any accuracy difference across settlement periods reflects the differing predictive relevance of lagged and rolling context rather than an artificially short horizon or compounding forecast error.
+
+Four contributions follow from this design: an auditable data consolidation pipeline resolving daylight saving anomalies across six annual NESO archives; a leakage safe autoregressive and cyclical feature engineering pipeline, validated by mutual information screening restricted to the pre 2025 partition, with the shortest lag depths withheld to preserve a genuine six hour horizon; a homogeneous benchmark spanning two Seasonal Naive baselines, a linear model, and six tree, boosting, and neural network estimators, two further complemented by hyperparameter tuning; and a six hypothesis statistical validation study covering baseline dominance, calendar relevance, seasonal interaction, renewable contribution, and peak period accuracy. Underpinning all of these, an explicit audit of forecast horizon consistency shows how an inflated $R^2$ can arise from near instantaneous lags alone, correcting which yields a lower yet more trustworthy figure, a diagnostic template of value beyond this particular grid.
+
+\section{Related Work}
+\label{sec:related}
+
+\subsection{Statistical and Tree Based Methods in Load Forecasting}
+
+Classical short term load forecasting approaches exponential smoothing, seasonal ARIMA, semi parametric additive models have historically formed the foundation of demand projection \cite{box2015time,zhang2003time}, mapping fixed calendar seasonalities directly onto aggregated curves, but their linear formulations scale poorly under the nonlinear volatility injected by distributed renewable generation \cite{hippert2001neural}.
+
+Contemporary research has therefore shifted toward supervised machine learning: Random Forest \cite{breiman2001random} offers a robust, easily tuned nonlinear baseline, while gradient boosted ensembles such as XGBoost \cite{chen2016xgboost} and LightGBM \cite{ke2017lightgbm}, building on Friedman's formulation \cite{friedman2001greedy}, isolate high order nonlinear interactions across tabular matrices and have proven competitive in large scale forecasting competitions \cite{taieb2014gradient,hong2016gefcom}. Deep sequence models have likewise been applied to residential and system level load series \cite{kong2019short}, part of a broader shift toward data driven smart meter analytics \cite{wang2019review}. The literature nonetheless remains thin on controlled comparisons between a bagging ensemble and two structurally different boosting implementations, depth wise versus leaf wise growth, under one shared pipeline and horizon a gap this paper addresses by training all three ensembles, plus a linear baseline and two Seasonal Naive references, on one identical feature matrix.
+
+\subsection{Feature Engineering, Interpretability, and Forecast Horizon}
+
+Autoregressive lags and rolling window statistics remain the predictive backbone of tabular load forecasting pipelines, encoding the same-time-yesterday and same-time-last-week references that seasonal naive models already exploit implicitly \cite{deb2017review}. Cyclical sine and cosine encodings of settlement period and day of week are a standard remedy for the artificial numerical distance plain integer calendar indices introduce at period boundaries. Comparatively little attention, however, is paid to the interaction between the shortest retained lag depths and a model's effective forecast horizon: near instantaneous lags can silently convert a multi hour task into nowcasting, inflating accuracy relative to naive references operating at genuinely longer horizons \cite{bergmeir2012use}.
+
+Feature screening by mutual information \cite{kraskov2004estimating} offers a model agnostic way to audit a large lag candidate set before training, complementing retrain based ablation, which gives a more direct causal estimate of a feature group's contribution than model internal importance scores or SHAP \cite{lundberg2017unified}. This is the interpretability strategy adopted here, together with random search hyperparameter tuning \cite{bergstra2012random}. Error is reported using MAE, RMSE, MAPE, and $R^2$, since MAE and RMSE respond differently to a small number of large errors \cite{willmott2005advantages}. MAPE's known denominator sensitivity, examined directly in the peak-period analysis of Section~\ref{sec:discussion}, motivates also computing the scale-free MASE \cite{hyndman2006another}: scaled against the in-sample MAE of one-step SNaive Daily persistence on the training partition (1821.3 MW), CatBoost's test-set MASE is 0.65, confirming its error is well below naive persistence on a metric immune to MAPE's denominator issues; MAPE remains the primary reported metric for comparability with the wider load forecasting literature. MSTL decomposition \cite{bandara2021mstl} separates nested seasonal components without repeated single-season fitting.
+
+\section{Methodology}
+\label{sec:methodology}
+
+\subsection{Problem Formulation}
+\label{sec:formulation}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.5\textwidth]{pipeline.png}
+\caption{Proposed pipeline: data consolidation, exploratory signal analysis, feature engineering, chronological splitting, and forecasting models.}
+\label{fig:methodology_pipeline}
+\end{figure}
+
+
+The proposed framework targets National Demand at the native thirty minute settlement period resolution rather than at a coarser daily aggregation, preserving the full diurnal shape of the demand curve for both training and evaluation. Because every predictor is constructed exclusively from settled historical observations, the same construction rule applies uniformly to every settlement period, and no period's forecast depends on another period's own prior forecast. Core notation follows Equation~\ref{eq:direct_forecast}: horizon $h \geq 12$ settlement periods (six hours), short term lag depths $L=\{12,24,36,48\}$, the weekly lag $H=336$ periods (seven days), and rolling window widths $W=\{8,24,48\}$. The pipeline follows the synchronised flow of data consolidation, exploratory signal analysis, feature extraction, chronological splitting, and competitive modelling illustrated in Figure~\ref{fig:methodology_pipeline}. Any localised increase in forecast error at a particular time of day therefore reflects a decline in the physical relevance of historical lag and rolling context at that period, rather than compounding model feedback.
+
+
+
+
+
+
+\subsection{Competitive Modelling Families}
+\label{sec:models}
+
+The downstream modelling tier evaluates twelve estimators, spanning nonparametric baselines to tuned tree ensembles and a neural baseline, on the feature matrix of Section~\ref{sec:featureeng}. Two Seasonal Naive benchmarks establish an operational floor: a daily reference repeating the value one day earlier, and a weekly reference repeating the value seven days earlier, both lag depths grounded in the autocorrelation diagnostics of Section~\ref{sec:eda}. Linear Regression, an ordinary least squares model on the full feature matrix, provides a parametric reference between the naive baselines and the nonlinear ensembles.
+
+Six tree or boosting based ensembles and one neural baseline complete the comparison, summarised in Table~\ref{tab:modelfamilies}. We retune XGBoost and LightGBM through a three fold expanding window random search over tree depth or leaf count, learning rate, estimator count, subsample and column-subsample ratios, and regularisation strength, evaluated only within the training timeline. We fit CatBoost, by contrast, directly with a single, literature-typical configuration (depth 8, learning rate 0.05, 0.8 subsample/column-subsample, fifty-round early stopping against the 2024 validation fold), so its strong performance in Table~\ref{tab:benchmark} reflects markedly less tuning effort, not intrinsic superiority.
+
+\begin{table}[H]
+\centering
+\small
+\caption{The six tree or boosting ensembles and one neural baseline benchmarked alongside Linear Regression and the two Seasonal Naive references.}
+\label{tab:modelfamilies}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{llll}
+\toprule
+\textbf{Model} & \textbf{Family} & \textbf{Mechanism} & \textbf{Tuning} \\
+\midrule
+Random Forest \cite{breiman2001random} & Bagging & Averages independently bootstrapped decorrelated trees & Fixed: 50 trees, depth 12 \\
+ExtraTrees & Bagging & Averages fully randomised decorrelated trees & Fixed: 50 trees, depth 14 \\
+HistGradientBoosting & Boosting & scikit-learn's \cite{pedregosa2011scikit} own histogram based boosting & Default \\
+XGBoost \cite{chen2016xgboost} & Boosting & Depth wise trees, squared error objective & Random search (3-fold CV) \\
+LightGBM \cite{ke2017lightgbm} & Boosting & Leaf wise trees, fewer splits per error budget & Random search (3-fold CV) \\
+CatBoost & Boosting & Ordered boosting, symmetric trees, native categorical handling & Single fixed configuration \\
+MLP & Neural & Single hidden layer, early stopping & Default \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
+
+We add a multilayer perceptron with early stopping as the neural baseline, so the comparison spans linear, bagged-tree, boosted-tree, and neural network families.
+
+\subsection{Study Area, Data Consolidation, and Feature Engineering}
+\label{sec:featureeng}
+
+The empirical evaluation is conducted on operational transmission telemetry from the Great Britain national grid (England, Scotland, and Wales), centrally balanced by NESO. National Demand is the aggregate net electricity requirement across the three nations, the residual load that large scale synchronised generation must continuously match. The raw repository comprises six annual settlement period archives spanning 2020 through 2025, consolidated by dropping an interconnector attribute published only from 2023 onward and resynchronising the two British-Summer-Time transition dates each year (twelve dates in total across the six-year period) via interpolation over a normalised relative time axis, yielding a complete matrix of 105{,}216 half hourly records.
+
+Building on this consolidated series, a minimum six hour forecast horizon is enforced throughout to eliminate the inflated performance near instantaneous persistence would otherwise cause, so lag depths of thirty and sixty minutes are withheld entirely. Autoregressive lags are built for National Demand alone, at four short term depths spanning six to twenty four hours plus a weekly depth of seven days; the two related auxiliary series (Transmission System Demand, England and Wales Demand) are excluded, since they sit only a few thousand megawatts from National Demand and could let a recursive forecaster substitute one series' predicted value for another's. Rolling mean and standard deviation statistics of demand, plus a rolling mean of embedded solar generation (standard deviation only for demand), are computed over three window widths, each shifted twelve periods (six hours) backward, matching the minimum lead time enforced elsewhere. Twelve exogenous columns recorded at the target's own period embedded wind and solar generation, pumped storage pumping, and nine interconnector flows are dropped outright, since none is observable six hours ahead; two installed-capacity columns for wind and solar are retained, as these are planning figures published well in advance. Cyclical calendar indicators map settlement period and day of week into sine and cosine pairs, supplemented by a weekend indicator. Candidate columns are screened with a mutual information filter computed only on the 2020 through 2024 partition; each sine/cosine pair and the settlement period index are protected from split filtering, so a threshold crossed by only one half of a cyclical encoding cannot silently discard its partner. The daily and weekly lags of demand score highest, leaving 22 retained predictors and a final matrix of 104{,}880 rows, partitioned into training (2020--2023), validation (2024), and a fully sealed test window (2025).
+
+
+\subsection{Exploratory Signal Diagnostics}
+\label{sec:eda}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{acf_pacf_combined.pdf}
+\caption{National Demand, two week excerpt (left); its autocorrelation function to two weeks of lag (centre); and partial autocorrelation to two days of lag (right).}
+\label{fig:acf}
+\label{fig:pacf}
+\end{figure}
+
+An Augmented Dickey Fuller test on the raw demand level series rejects the unit root null hypothesis, but with 105{,}216 observations this test has near certain power to reject regardless of the series' true structure, so the result is read narrowly as ruling out a stochastic random-walk root, not as evidence against the periodicity documented below or the modest trend the MSTL decomposition later isolates. A stationary level series is nonetheless the natural setting for the seasonal lag features of Section~\ref{sec:featureeng}, in preference to differencing. Figure~\ref{fig:acf} evaluates the sample autocorrelation and partial autocorrelation functions of National Demand.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{fig_5_mstl_decomposition.pdf}
+\caption{MSTL decomposition of National Demand: observed series, trend, daily/weekly seasonal components, and residual.}
+\label{fig:mstl}
+\end{figure}
+
+
+The centre panel shows a strongly periodic autocorrelation whose local peaks recur at exact multiples of one day, decaying only slowly across the two week window evidence that the intraday pattern is structural, not transient, and direct justification for the daily naive baseline of Section~\ref{sec:models}. The peak at exactly seven days stands appreciably taller than neighbouring daily peaks on a different weekday, the signature of a weekday-versus-weekend contrast, supplying the rationale for pairing a weekly naive reference with the daily one. The right panel's partial autocorrelation isolates direct influence over two consecutive days: the shortest lags carry especially high partial autocorrelation, reflecting strong short horizon inertia, before decaying rapidly and re-emerging as a distinct spike exactly one day later. This joint behaviour, slow autocorrelation decay alongside a partial autocorrelation that re-emerges at the seasonal landmark, is the signature of a low order autoregressive process on a strong seasonal component, motivating the selective lag structure of Section~\ref{sec:featureeng} in preference to feeding dozens of raw lags directly into the tree based estimators.
+
+
+Multiple Seasonal Trend decomposition using Loess \cite{bandara2021mstl} separates the series into trend, daily seasonal, weekly seasonal, and residual components; Figure~\ref{fig:mstl} shows the trend evolving smoothly, the daily component carrying substantially larger amplitude than the weekly one, and a small, unstructured residual. Decomposing total variance confirms this: the daily component accounts for the largest share, the trend a further substantial share, the weekly component a modest but non-negligible share, and the residual only a small remainder most demand variability is explained by deterministic calendar structure rather than noise, the empirical condition under which a calendar and lag feature based learner can be expected to outperform a hand tuned classical seasonal model. Seasonal averages corroborate this: demand is highest in winter and lowest in summer, with no summer peak, consistent with a winter-heating-dominated profile, and weekday demand exceeds weekend demand by roughly 11.5\%. The core demand series are also almost perfectly collinear, so only their lagged history, not contemporaneous values, is retained as predictive input.
+
+
+
+\section{Results}
+\label{sec:results}
+
+\subsection{Aggregate Benchmark Performance}
+\label{sec:evaluation}
+
+
+
+
+
+Table~\ref{tab:benchmark} reports MAE, RMSE, MAPE, and $R^2$ for every trained artefact on the identical 2025 holdout ($n=17{,}520$), ranked by RMSE; the first ten rows share the same $t-12$ (6h) lead time, while the two Seasonal Naive references use the longer, operationally realistic horizons a forecaster would actually have available. Almost every adjacent pair among the first ten rows is statistically distinguishable at $p<0.05$ under the Diebold--Mariano test, the one exception being XGBoost versus MLP ($p=0.910$): their MAPE values differ by only 0.06 percentage points (5.27\% vs.\ 5.33\%), though their MAE values still differ by 42.7 MW, and the pair should be read as statistically tied despite that MAE gap. $^{\dagger}$The fair-horizon persistence control matches the $t-12$ lead time exactly; run on the current, leak-fixed matrix, it is statistically distinguishable from SNaive Weekly at $p<0.001$, confirming that naive persistence at a six hour remove carries essentially no forecasting value.
+
+
+
+CatBoost is the strongest estimator on every metric in Table~\ref{tab:benchmark}, though the top ten learned models (all but Linear Regression) sit within a narrow band: MAPE from 4.90\% to 5.57\%, $R^2$ from 0.906 to 0.927. Three-fold expanding-window cross validation on 2020--2024 complicates this ranking: CatBoost attains the best cross-validated $R^2$ (0.9053, tied with MLP) and the second-lowest cross-validated RMSE (1491.5 $\pm$ 141.1 MW), yet MLP posts the single lowest cross-validated RMSE of any model (1445.8 $\pm$ 38.3 MW) despite finishing eighth of ten on the sealed test year a rank instability itself worth reporting. Section~\ref{sec:multiseed} pushes this further: a five-seed repeat shows CatBoost's lead over the tuned LightGBM is within noise.
+
+\begin{table}[H]
+\centering
+\small
+\caption{MAE, RMSE, MAPE, and $R^2$ of every model on the leakage safe 2025 holdout ($n=17{,}520$), ranked by RMSE. \emph{Lead time}: most recent information permitted (\(t-12\)=6h per Equation~\ref{eq:direct_forecast}; \(t-48\)=24h; \(t-336\)=7 days). \emph{DM $p$}: Diebold--Mariano test \cite{diebold1995comparing} vs.\ the row above. Diebold--Mariano tests against the two newly added tuned rows were rerun on retrained models (notebook \texttt{05\_horizon\_review\_reruns.ipynb}). Best value per metric column in bold.}
+\label{tab:benchmark}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lccccll}
+\toprule
+\textbf{Model} & \textbf{MAE (MW)} & \textbf{RMSE (MW)} & \textbf{MAPE (\%)} & \textbf{$R^2$} & \textbf{Lead time} & \textbf{DM $p$ (vs.\ row above)} \\
+\midrule
+CatBoost Regressor              & \textbf{1192.4} & \textbf{1665.2} & \textbf{4.90} & \textbf{0.9272} & $t-12$ (6h)      & --- \\
+LightGBM Regressor (Tuned)      & 1227.3 & 1693.2 & 4.99 & 0.9248 & $t-12$ (6h)      & $<0.001$ \\
+XGBoost Regressor (Tuned)       & 1229.6 & 1703.4 & 5.04 & 0.9239 & $t-12$ (6h)      & 0.002 \\
+LightGBM Regressor               & 1230.8 & 1714.0 & 5.01 & 0.9229 & $t-12$ (6h)      & 0.004 \\
+ExtraTrees Regressor              & 1255.4 & 1735.5 & 5.09 & 0.9210 & $t-12$ (6h)      & $<0.001$ \\
+HistGradientBoosting Regressor    & 1266.3 & 1749.0 & 5.13 & 0.9197 & $t-12$ (6h)      & 0.018 \\
+XGBoost Regressor                 & 1273.1 & 1769.1 & 5.27 & 0.9179 & $t-12$ (6h)      & 0.001 \\
+MLP Regressor                     & 1315.8 & 1770.3 & 5.33 & 0.9178 & $t-12$ (6h)      & 0.910 \\
+Random Forest Regressor           & 1332.4 & 1844.7 & 5.41 & 0.9107 & $t-12$ (6h)      & $<0.001$ \\
+Linear Regression                 & 1403.1 & 1892.4 & 5.57 & 0.9060 & $t-12$ (6h)      & $<0.001$ \\
+SNaive Daily                      & 1849.7 & 2577.2 & 7.37 & 0.8257 & $t-48$ (24h)     & $<0.001$ \\
+SNaive Weekly                     & 2177.7 & 2918.9 & 8.44 & 0.7764 & $t-336$ (7 days) & $<0.001$ \\
+\addlinespace
+SNaive Lag12 (fair horizon)$^{\dagger}$ & 5384.7 & 6501.8 & 21.12 & $-0.1094$ & $t-12$ (6h) & $<0.001$ \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
+
+Breaking this down by individual fold (for the five models requiring no library beyond scikit-learn), $R^2$ drops sharply and consistently in Fold 2 (May--September 2024) for every model, by 0.08 to 0.13 relative to the other two folds, a genuine distribution shift, since the effect appears regardless of model family, though MAE, RMSE, and MAPE move less consistently because Fold 2 also carries lower absolute demand levels. This resolves an ambiguity in the single mean $\pm$ standard deviation previously reported per model: the spread reflects genuine seasonal difficulty, not simply noise.
+
+This dominance follows from a mechanistic property of sequential boosting: each shallow tree corrects the residual error left by its predecessor, letting the model interpolate among several informative analogues, whereas Random Forest averages independently bootstrapped trees that never observe each other's errors. Against the stronger Seasonal Naive baseline, CatBoost cuts RMSE by approximately 35.4\% and reduces MAPE from 7.37\% to 4.90\% considerably more modest than an inflated 87\% figure from an earlier configuration retaining near instantaneous lags, and still more modest than the 51.9\% reported under a second, subtler leak (Section~\ref{sec:discussion}), yet an honest, operationally meaningful improvement once both leaks are removed.
+
+Linear Regression is the weakest learned model but, once both horizon leaks are removed, it now beats the daily naive baseline on every reported metric (MAE 1403.1 vs.\ 1849.7 MW, MAPE 5.57\% vs.\ 7.37\%), reversing the earlier, leaky configuration in which the daily naive reference actually won an artefact of the contemporaneous-exogenous leak, not a property of the demand series itself. The ratio of each model's own RMSE to its own MAE shows how concentrated error is in a few large misses: Linear Regression's ratio is 1892.4/1403.1 $=$ 1.35, the daily naive baseline's 2577.2/1849.7 $=$ 1.39 a heavier tail for the naive baseline, not Linear Regression: its typical error is larger, but the naive reference is more prone to occasional very large misses, plausibly on holidays and extreme-weather days when yesterday's value is a poor analogue. Figure~\ref{fig:lrsnaive} confirms this on the residual distributions: 11.4\% of SNaive Daily's errors exceed 4{,}000 MW against 4.9\% for Linear Regression, and its single largest miss (12{,}719 MW) falls on 2 January 2025, the first working day after New Year's Day. The fair horizon persistence control fares far worse than either, posting a negative $R^2$ and a MAPE above 21\%, confirming persistence alone at a six hour remove carries essentially no forecasting value for a series whose dominant structure is diurnal rather than hourly.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{lr_snaive_error_dist.pdf}
+\caption{Signed prediction error of Linear Regression vs.\ SNaive Daily on the 2025 holdout: (a) overlaid error histograms; (b) the same errors as boxplots.}
+\label{fig:lrsnaive}
+\end{figure}
+
+\subsection{Multi-Seed Robustness}
+\label{sec:multiseed}
+
+Table~\ref{tab:benchmark} reports only a single seed per model, so it cannot by itself
+distinguish a genuine top performer from one that happened to draw a favourable random
+initialisation. Table~\ref{tab:multiseed} repeats training for the nine non-baseline
+learned models across five seeds (42, 7, 123, 2024, 99), reporting mean $\pm$ standard
+deviation on the same sealed 2025 test year.
+
+
+CatBoost's single-seed lead over the tuned LightGBM (Table~\ref{tab:benchmark}: 4.90\%
+vs.\ 4.99\% MAPE) essentially disappears under the five-seed protocol below. CatBoost averages 4.962\%
+$\pm$ 0.071 across seeds, LightGBM (Tuned) 4.964\% $\pm$ 0.028 a difference of 0.002
+points, far smaller than either model's own seed-to-seed spread. CatBoost's MAPE standard
+deviation (0.071 points) is roughly two and a half times LightGBM (Tuned)'s (0.028
+points), so the single-seed result in Table~\ref{tab:benchmark} plausibly reflects a
+favourable draw for CatBoost, rather than a robust advantage. A second-order instability
+also surfaces: XGBoost and HistGradientBoosting swap order between the single-seed
+ranking (Table~\ref{tab:benchmark}) and the five-seed mean, mirroring the fold-level
+instability already documented for the cross-validated $R^2$ above. Tuning also stabilises results
+for LightGBM and XGBoost: both tuned variants post a smaller MAPE standard deviation than
+their untuned counterparts. CatBoost is the exception: its seed-to-seed variance is the
+highest of the eight models, despite topping the mean ranking. This argues for reporting
+a seed range, not a single point estimate, whenever models finish within a fraction of a
+percentage point of one another precisely the situation at the top of
+Table~\ref{tab:benchmark}.
+
+
+\begin{table}[H]
+\centering
+\small
+\caption{Five-seed robustness check (seeds 42, 7, 123, 2024, 99) for the nine non-baseline models, mean $\pm$ std on the same 2025 test year as Table~\ref{tab:benchmark}, ranked by mean RMSE.}
+\label{tab:multiseed}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Model} & \textbf{$R^2$} & \textbf{MAE (MW)} & \textbf{RMSE (MW)} & \textbf{MAPE (\%)} \\
+\midrule
+CatBoost Regressor              & 0.9256 $\pm$ 0.0018 & 1207.8 $\pm$ 13.4 & 1684.2 $\pm$ 20.0 & 4.962 $\pm$ 0.071 \\
+LightGBM Regressor (Tuned)      & 0.9253 $\pm$ 0.0005 & 1220.5 $\pm$ 6.8  & 1687.7 $\pm$ 5.9  & 4.964 $\pm$ 0.028 \\
+XGBoost Regressor (Tuned)       & 0.9242 $\pm$ 0.0005 & 1229.0 $\pm$ 3.3  & 1700.1 $\pm$ 5.3  & 5.022 $\pm$ 0.020 \\
+LightGBM Regressor              & 0.9220 $\pm$ 0.0025 & 1237.2 $\pm$ 20.3 & 1723.5 $\pm$ 28.1 & 5.052 $\pm$ 0.111 \\
+ExtraTrees Regressor            & 0.9206 $\pm$ 0.0005 & 1259.3 $\pm$ 4.7  & 1739.0 $\pm$ 5.5  & 5.112 $\pm$ 0.021 \\
+XGBoost Regressor               & 0.9203 $\pm$ 0.0018 & 1256.3 $\pm$ 11.3 & 1743.1 $\pm$ 19.7 & 5.176 $\pm$ 0.067 \\
+HistGradientBoosting Regressor  & 0.9195 $\pm$ 0.0022 & 1263.7 $\pm$ 16.8 & 1751.4 $\pm$ 23.4 & 5.149 $\pm$ 0.093 \\
+MLP Regressor                   & 0.9163 $\pm$ 0.0018 & 1325.6 $\pm$ 17.2 & 1785.7 $\pm$ 19.4 & 5.400 $\pm$ 0.081 \\
+Random Forest Regressor         & 0.9104 $\pm$ 0.0007 & 1335.2 $\pm$ 4.8  & 1848.1 $\pm$ 7.3  & 5.425 $\pm$ 0.021 \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
+
+\subsection{Machine Learning Performance Diagnostics}
+\label{sec:mlperf}
+
+
+
+A four-panel diagnostic check on CatBoost, the model actually reported as champion throughout this paper, confirms these aggregate metrics (Figure~\ref{fig:mlperf}). Daily averaged actual and predicted demand track closely through every seasonal transition, and the prediction-to-actual ratio oscillates near unity with no systematic bias, though the oscillation widens during volatile shoulder months. The signed prediction error is unimodal and closely symmetric, with a standard deviation matching the model's own RMSE most error is ordinary variance, not directional bias -- and the residual-versus-predicted scatter shows no funnel shape or underprediction at high load, of direct relevance since underforecasting at high load is the greatest risk to reserve margin planning. Converted into monthly volumes, CatBoost's MAPE ranges from 3.86\% in November, its most accurate month, to 6.38\% in May, its least accurate, consistent with the annual MAPE of 4.90\% reported in Table~\ref{tab:benchmark}; the spring/early-summer transition is consistently harder to forecast than the depths of winter.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{ml_performance_catboost.png}
+\caption{Diagnostics for CatBoost on the 2025 test partition: daily averaged actual against predicted demand (top left), the prediction to actual ratio over time (top right), the smoothed distribution of the signed prediction error (bottom left), and residuals against predicted values (bottom right).}
+\label{fig:mlperf}
+\end{figure}
+
+\section{Discussion}
+\label{sec:discussion}
+
+The weekday versus weekend asymmetry (Section~\ref{sec:evaluation}) shows neither Seasonal Naive reference dominates uniformly: the daily reference is more accurate through the week, but its advantage nearly vanishes at the weekend, where the weekly reference reuses the same weekday one week earlier. Every trained model now outperforms both naive references on every metric, confirming a nonlinear architecture is essential once near instantaneous lags are withheld.
+
+The single methodological decision with the widest ranging consequences here is enforcing a genuine six hour lead time, but doing so correctly took two attempts. Table~\ref{tab:leakprogression} places all three configurations side by side. Configuration A retains near instantaneous autoregressive lags and same-period exogenous columns, neither observable by a real six-hour-ahead forecaster; its $R^2$ of 0.997 reflects a nowcast, not genuine skill. Configuration B withholds the short lags but still carries a second, subtler leak: twelve exogenous columns recorded at the target's own settlement period, hard-coded to a one-period rolling shift rather than the twelve-period minimum enforced elsewhere. Configuration C withholds both; only its inputs are known at the six hour decision point, and its $R^2=0.9272$ (CatBoost) is the only figure used throughout the rest of this paper. That the second leak passed three earlier review rounds argues for auditing every derived feature's lead time individually, rather than trusting one fix to generalise.
+
+\begin{table}[H]
+\centering
+\small
+\caption{Three configurations of the same pipeline: each successive horizon-consistency fix lowers $R^2$ while raising its trustworthiness. ``Known at $t-12$'' marks whether every input is actually available six hours before the target. The champion model differs across rows since each fix changed which estimator scored best; A is recorded from the project log rather than a currently reproducible artefact (its feature file predates the fixes in Section~\ref{sec:featureeng} and was not retained).}
+\label{tab:leakprogression}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{llccc}
+\toprule
+\textbf{Configuration} & \textbf{Model} & \textbf{$R^2$} & \textbf{RMSE reduction} & \textbf{Known at $t-12$?} \\
+\midrule
+A: original, unfixed & best available (historical log) & 0.997 & $\approx$87\% & No \\
+B: short lags removed only & LightGBM (Tuned) & 0.9596 & 51.9\% & Partial \\
+C: fully fixed (this paper) & CatBoost & 0.9272 & 35.4\% & Yes \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
+
+Table~\ref{tab:hypotheses} consolidates the six hypothesis-driven retrain experiments that were previously scattered across several paragraphs of prose. Each row gives the ablated or contrasted configuration, the model(s) evaluated, the metric before and after, the percentage change, and the sample size, so readers can check magnitude and direction without hunting through prose.
+
+\begin{table}[H]
+\centering
+\tiny
+\caption{The six hypothesis-driven retrain experiments (17{,}520-period 2025 holdout; 2{,}920 peak / 14{,}600 off-peak periods for H6). $^{\ddagger}$H5's original leaky ablation is omitted (Section~\ref{sec:discussion}). Negative \% change denotes improvement.}
+\label{tab:hypotheses}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{p{2.6cm}p{2.6cm}p{2.6cm}rrrr}
+\toprule
+\textbf{Hypothesis} & \textbf{Config.\ contrasted} & \textbf{Model} & \textbf{Metric} & \textbf{Before} & \textbf{After} & \textbf{\% chg.} \\
+\midrule
+H1: Baseline dominance & Learned model vs.\ strongest naive & CatBoost vs.\ SNaive Daily & RMSE (MW) & 2577.2 & 1665.2 & $-35.4$ \\
+H2: Intraday cyclical encoding & \texttt{PERIOD\_SIN/COS} withdrawn (raw \texttt{SETTLEMENT\_PERIOD} withdrawn together) & Avg.\ of 3 tree ensembles & MAE (MW) & 1278.9 & 1304.7 & $+2.04$ \\
+H3: Day-of-week encoding & \texttt{DOW\_SIN/COS} withdrawn & Avg.\ of 3 tree ensembles & MAE (MW) & 1278.9 & 1356.6 & $+6.10$ \\
+H3b: Weekend indicator & \texttt{IS\_WEEKEND} withdrawn & Avg.\ of 3 tree ensembles & MAE (MW) & 1278.9 & 1266.1 & $-1.01$ \\
+H4: Seasonal / weekday interaction & Weekday vs.\ weekend demand level & All (descriptive) & Mean demand & 100 (index) & 111.5 (index) & $+11.5$ \\
+\multirow{2}{2.6cm}{H5: Renewable feature contribution$^{\ddagger}$} & Renewables at $t-12$ (legitimate), re-run & XGBoost & MAE (MW) & 1306.97 & 1441.31 & $+10.3$ \\
+ & Renewables contemporaneous (leak reproduced), re-run & XGBoost & MAE (MW) & 908.67 & 1441.31 & $+58.6$ \\
+\multirow{8}{2.6cm}{H6: Peak-period accuracy (16.7\% of test year)} & Peak (SP 15--18, 35--38) vs.\ off-peak & HistGradientBoosting & MAE (MW) & 1286.3 & 1166.0 & $-9.4$ \\
+ & Peak vs.\ off-peak & ExtraTrees & MAE (MW) & 1283.5 & 1115.3 & $-13.1$ \\
+ & Peak vs.\ off-peak & Random Forest & MAE (MW) & 1357.7 & 1206.2 & $-11.2$ \\
+ & Peak vs.\ off-peak & CatBoost & MAE (MW) & 1219.3 & 1058.2 & $-13.2$ \\
+ & Peak vs.\ off-peak & LightGBM & MAE (MW) & 1252.9 & 1120.3 & $-10.6$ \\
+ & Peak vs.\ off-peak & XGBoost & MAE (MW) & 1293.1 & 1173.0 & $-9.3$ \\
+ & Peak vs.\ off-peak & MLP & MAE (MW) & 1300.7 & 1391.6 & $+7.0$ \\
+ & Peak vs.\ off-peak & Linear Regression & MAE (MW) & 1380.0 & 1518.7 & $+10.1$ \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
+
+Correctly isolating calendar feature groups (H2, H3) required repairing a flaw in the original ablation, where removing only the transformed cyclical pair while leaving the raw settlement period index in place let it silently carry the withdrawn information. Once fixed, withdrawing day-of-week encoding costs substantially more (6.10\%) than withdrawing the intraday hour-of-day pair (2.04\%) -- roughly three times the impact -- plausibly because the daily lag ($t-48$) already encodes much of the intraday shape, whereas no retained lag depth encodes the weekday-versus-weekend contrast as directly as the explicit day-of-week pair does. The binary weekend indicator, by contrast, is confirmed empirically redundant (Table~\ref{tab:hypotheses}, H3b): withdrawing it changes MAE by only $-1.01\%$ on average across the same three tree ensembles, and actually lowers XGBoost's MAE by 2.96\%, so it can be dropped from the feature set without cost.
+
+H5's three ``original'' rows are the paper's first-pass finding, not a genuine measurement of renewable value: they ablate wind and solar columns recorded contemporaneously with the target, the same columns identified as leaking, so much of the reported 39.01\%/30.90\%/13.48\% swing is a second measurement of the leak. Re-running with XGBoost on the leak-removed matrix confirms this: restoring renewables at a legitimate $t-12$ lag improves MAE by only 10.3\%, an order of magnitude smaller than the original, whereas reproducing the leak recovers 58.6\%. Lagged, leakage-safe renewable data therefore makes a real but modest contribution: most of the original effect size was the horizon leak, not evidence renewables are dispensable, and the genuine remaining value most plausibly comes from forward-looking weather prediction rather than the lagged generation proxy itself.
+
+H6 runs directly counter to the intuition that raised it: MAE in megawatts falls at peak periods for every tree-based model, confirmed across all six tree and boosting ensembles ($-9$ to $-13.2\%$), while it worsens for the two non-tree models ($+7$ to $+10\%$). The megawatt reading shows the improvement is not purely a denominator effect, plausibly because the daily and weekly lags are most informative when demand follows its most regular pattern; CatBoost shows the largest peak-period improvement ($-13.2\%$).
+
+Several structural constraints qualify these conclusions. The feature matrix contains no true meteorological covariates, so genuine skill at a longer horizon remains untested. The random search explored only a narrow hyperparameter budget within 2020 through 2024, adequate for a modest tuning gain but unlikely to find a global optimum. The retrain based ablations were applied only to the tree ensembles at their fixed training configuration, not sklearn's own defaults, and the framework targets a single national aggregate series. Random Forest and ExtraTrees were both trained at a deliberately reduced configuration (50 trees, depth capped at 12 and 14 respectively, versus scikit-learn's own default of 100 unlimited-depth trees). Retraining both at true defaults on the same matrix narrows but does not close the gap (Random Forest: MAE 1325.3 MW, RMSE 1828.5 MW, MAPE 5.40\%, $R^2=0.9123$; ExtraTrees: MAE 1249.3 MW, RMSE 1722.1 MW, MAPE 5.09\%, $R^2=0.9222$), Random Forest's last-place finish is therefore only partly a configuration artefact.
+
+The comparison against naive baselines also lacked a counterpart against NESO's own published forecast, until this revision, via the ``Day Ahead Half Hourly Demand Forecast Performance'' dataset \cite{neso2026forecast}. Aligned to the identical 2025 holdout, NESO's operational forecast achieves a MAPE of 2.69\%, MAE of 679.2 MW, RMSE of 912.2 MW comfortably better than CatBoost's 4.90\%/1{,}192.4 MW/1{,}665.2 MW, despite NESO's longer lead time. The pipeline here is a genuine academic benchmark and large improvement over naive persistence, but not yet competitive with the incumbent operational forecast, likely because that forecast draws on genuine weather prediction this pipeline's lagged proxies cannot supply.
+
+Replacing lagged proxies with genuine numerical weather prediction, at the same six hour lead time, is the highest priority extension. Every result reported so far is a deterministic point forecast, yet unit commitment and reserve procurement require a calibrated interval \cite{hong2016probabilistic}, so a quantile reformulation was fitted on the same 22 predictors: three LightGBM regressors under the pinball loss at $\tau \in \{0.05, 0.5, 0.95\}$ for a nominal 90\% interval. On the sealed 2025 holdout this achieves a PICP of only 71.4\%, so the interval is too narrow and not yet trustworthy for reserve margin sizing; conformal recalibration is a precondition, not an optional refinement.
+
+\section{Conclusion}
+\label{sec:conclusion}
+
+A complete, auditable short term load forecasting pipeline has been developed for Great Britain National Demand, from 105{,}216 half hourly NESO settlement period records spanning 2020 through 2025. The data consolidation stage resolves twelve structurally anomalous calendar days into a single, continuously sampled matrix, and the leakage safe feature engineering stage builds a 22 predictor matrix of autoregressive lags, rolling statistics, and cyclical calendar encodings, validated by mutual information screening restricted to the pre 2025 partition, with a minimum six hour lead time enforced throughout. The resulting benchmark spans twelve trained artefacts (ten learned models plus two Seasonal Naive baselines), with CatBoost emerging as strongest: MAE 1{,}192.4 MW, RMSE 1{,}665.2 MW, MAPE 4.90\%, $R^2=0.9272$, a 35.4\% RMSE reduction over the stronger naive baseline. A further contribution shows this pipeline caught the identical forecast-horizon defect twice in succession: an earlier configuration first inflated $R^2$ to an implausible 0.997 via the two shortest autoregressive lags, and after that was fixed, a second configuration still inflated $R^2$ to 0.9596 via twelve exogenous columns recorded at the target's own settlement period. Correcting both strengthens rather than weakens the study's credibility, anchored by the negative $R^2$ of the fair horizon control and a documented case of the same audit catching its own residual defect on a second pass.
+
+The hypothesis driven experiments sharpen this headline result into an operationally grounded narrative. Neither Seasonal Naive baseline dominates uniformly, and every trained model, including Linear Regression, clears both naive floors on every reported metric, evidence that the daily and weekly seasonal structure in this series is strong enough for even a linear model to exploit once near-instantaneous lags are withheld. Day-of-week cyclical encoding contributes roughly three times more than intraday hour-of-day encoding once the ablation correctly withdraws the raw settlement period index, while the separate binary weekend indicator proves empirically redundant and can be dropped without cost. Embedded renewable generation features make a real but modest contribution once measured honestly on the leak-removed matrix an order of magnitude smaller than an earlier, flawed configuration had suggested, since most of that original effect size was itself the horizon leak rather than genuine renewable signal and forecast accuracy at the peak periods most consequential for grid balancing improves in relative terms for every learned model. Taken together, these findings support a carefully engineered, horizon honest pipeline for point-forecast tasks such as day-ahead scheduling; reserve procurement and unit commitment, though, depend on calibrated uncertainty, and Section~\ref{sec:discussion}'s first quantile attempt shows calibration is not yet in hand a nominal 90\% interval covering only 71.4\% of the sealed test year is not a basis for sizing reserve margins. The explicit correction of the forecast horizon mismatch documented throughout offers a transferable lesson regardless: an impressively high $R^2$ or a large reduction over a naive baseline should always be checked against the lead time separating the information available to the model from the settlement period it must predict.
+
+\begin{thebibliography}{25}
+\small
+\setlength{\itemsep}{0pt}
+\setlength{\parskip}{0pt}
+
+\bibitem{hong2016probabilistic}
+Hong, T., Fan, S.: Probabilistic electric load forecasting: a tutorial review. Int.\ J.\ Forecast.\ 32(3), 914--938 (2016)
+
+\bibitem{hyndman2018forecasting}
+Hyndman, R.J., Athanasopoulos, G.: Forecasting: Principles and Practice, 2nd edn. OTexts, Melbourne (2018)
+
+\bibitem{taylor2012short}
+Taylor, J.W.: Short term load forecasting with exponentially weighted methods. IEEE\ Trans.\ Power\ Syst.\ 27(1), 458--464 (2012)
+
+\bibitem{fan2012short}
+Fan, S., Hyndman, R.J.: Short term load forecasting based on a semi parametric additive model. IEEE\ Trans.\ Power\ Syst.\ 27(1), 134--141 (2012)
+
+\bibitem{sevlian2018scaling}
+Sevlian, R., Rajagopal, R.: A scaling law for short term load forecasting on varying levels of aggregation. Int.\ J.\ Electr.\ Power\ Energy\ Syst.\ 98, 350--361 (2018)
+
+\bibitem{ke2017lightgbm}
+Ke, G., Meng, Q., Finley, T., Wang, T., Chen, W., Ma, W., Ye, Q., Liu, T.Y.: {LightGBM}: a highly efficient gradient boosting decision tree. In: NeurIPS 30, pp.\ 3146--3154 (2017)
+
+\bibitem{chen2016xgboost}
+Chen, T., Guestrin, C.: {XGBoost}: a scalable tree boosting system. In: KDD 2016, pp.\ 785--794 (2016)
+
+\bibitem{breiman2001random}
+Breiman, L.: Random forests. Mach.\ Learn.\ 45(1), 5--32 (2001)
+
+\bibitem{kraskov2004estimating}
+Kraskov, A., St{\"o}gbauer, H., Grassberger, P.: Estimating mutual information. Phys.\ Rev.\ E 69(6), 066138 (2004)
+
+\bibitem{pedregosa2011scikit}
+Pedregosa, F., Varoquaux, G., Gramfort, A., et al.: Scikit-learn: machine learning in {P}ython. J.\ Mach.\ Learn.\ Res.\ 12, 2825--2830 (2011)
+
+\bibitem{neso2025historic}
+National Energy System Operator ({NESO}): Historic Demand Data. \url{https://www.neso.energy/data-portal/historic-demand-data} (accessed Jun 2026)
+
+\bibitem{neso2026forecast}
+National Energy System Operator ({NESO}): Day Ahead Half Hourly Demand Forecast Performance. \url{https://www.neso.energy/data-portal/day-ahead-half-hourly-demand-forecast-performance} (accessed Jul 2026)
+
+\bibitem{friedman2001greedy}
+Friedman, J.H.: Greedy function approximation: a gradient boosting machine. Ann.\ Stat.\ 29(5), 1189--1232 (2001)
+
+\bibitem{zhang2003time}
+Zhang, G.P.: Time series forecasting using a hybrid {ARIMA} and neural network model. Neurocomputing 50, 159--175 (2003)
+
+\bibitem{bergmeir2012use}
+Bergmeir, C., Ben{\'i}tez, J.M.: On the use of cross validation for time series predictor evaluation. Inf.\ Sci.\ 191, 192--213 (2012)
+
+\bibitem{bergstra2012random}
+Bergstra, J., Bengio, Y.: Random search for hyper parameter optimization. J.\ Mach.\ Learn.\ Res.\ 13, 281--305 (2012)
+
+\bibitem{lundberg2017unified}
+Lundberg, S.M., Lee, S.I.: A unified approach to interpreting model predictions. In: NeurIPS 30, pp.\ 4765--4774 (2017)
+
+\bibitem{weron2014electricity}
+Weron, R.: Electricity price forecasting: a review of the state of the art with a look into the future. Int.\ J.\ Forecast.\ 30(4), 1030--1081 (2014)
+
+\bibitem{hong2016gefcom}
+Hong, T., Pinson, P., Fan, S., Zareipour, H., Troccoli, A., Hyndman, R.J.: Probabilistic energy forecasting: Global Energy Forecasting Competition 2014 and beyond. Int.\ J.\ Forecast.\ 32(3), 896--913 (2016)
+
+\bibitem{deb2017review}
+Deb, C., Zhang, F., Yang, J., Lee, S.E., Shah, K.W.: A review on time series forecasting techniques for building energy consumption. Renew.\ Sustain.\ Energy\ Rev.\ 74, 902--924 (2017)
+
+\bibitem{kong2019short}
+Kong, W., Dong, Z.Y., Jia, Y., Hill, D.J., Xu, Y., Zhang, Y.: Short term residential load forecasting based on {LSTM} recurrent neural network. IEEE\ Trans.\ Smart\ Grid 10(1), 841--851 (2019)
+
+\bibitem{wang2019review}
+Wang, Y., Chen, Q., Hong, T., Kang, C.: Review of smart meter data analytics: applications, methodologies, and challenges. IEEE\ Trans.\ Smart\ Grid 10(3), 3125--3148 (2019)
+
+\bibitem{willmott2005advantages}
+Willmott, C.J., Matsuura, K.: Advantages of the mean absolute error ({MAE}) over the root mean square error ({RMSE}) in assessing average model performance. Clim.\ Res.\ 30(1), 79--82 (2005)
+
+\bibitem{bandara2021mstl}
+Bandara, K., Hyndman, R.J., Bergmeir, C.: {MSTL}: a seasonal trend decomposition algorithm for time series with multiple seasonal patterns. arXiv preprint arXiv:2107.13462 (2021)
+
+\bibitem{box2015time}
+Box, G.E.P., Jenkins, G.M., Reinsel, G.C., Ljung, G.M.: Time Series Analysis: Forecasting and Control, 5th edn. Wiley, Hoboken (2015)
+
+\bibitem{taieb2014gradient}
+Taieb, S.B., Hyndman, R.J.: A gradient boosting approach to the {K}aggle load forecasting competition. Int.\ J.\ Forecast.\ 30(2), 382--394 (2014)
+
+\bibitem{hippert2001neural}
+Hippert, H.S., Pedreira, C.E., Souza, R.C.: Neural networks for short term load forecasting: a review and evaluation. IEEE\ Trans.\ Power\ Syst.\ 16(1), 44--55 (2001)
+
+\bibitem{diebold1995comparing}
+Diebold, F.X., Mariano, R.S.: Comparing predictive accuracy. J.\ Bus.\ Econ.\ Stat.\ 13(3), 253--263 (1995)
+
+\bibitem{hyndman2006another}
+Hyndman, R.J., Koehler, A.B.: Another look at measures of forecast accuracy. Int.\ J.\ Forecast.\ 22(4), 679--688 (2006)
+
+\end{thebibliography}
+
+\end{document}
